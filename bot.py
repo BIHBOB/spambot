@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Токены для Telegram и VK с проверкой
-7506083870:AAFePsqVIvR-8iKfZ9QAc43n7MFqvQKJEMA = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_TOKEN = os.getenv('7506083870:AAFePsqVIvR-8iKfZ9QAc43n7MFqvQKJEMA')
 if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     logger.error("TELEGRAM_TOKEN не задан или содержит пробелы. Убедитесь, что он правильно настроен в переменных окружения.")
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен. Настройте его в .env или в настройках Render.")
