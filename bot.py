@@ -32,7 +32,8 @@ if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
 # Railway предоставляет публичный домен через переменную окружения
-WEBHOOK_URL = os.getenv('WEBHOOK_URL') or f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', 'your-app-name.railway.app')}"
+RAILWAY_PUBLIC_DOMAIN = os.getenv('RAILWAY_PUBLIC_DOMAIN', 'your-app-name.railway.app')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', f"https://{RAILWAY_PUBLIC_DOMAIN}")
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_FULL_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
