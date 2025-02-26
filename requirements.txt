@@ -1,4 +1,5 @@
 telebot
-vk-api
+vk_api
+flask
 python-dotenv
 requests
