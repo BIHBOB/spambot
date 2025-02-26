@@ -407,7 +407,7 @@ def start_safe_polling():
     while bot_started:
         try:
             logger.info("Запуск безопасного поллинга Telegram...")
-            bot.polling(none_stop=True, allowed_updates=types.AllowedUpdates())  # Указываем все обновления
+            bot.polling(none_stop=True)  # Убрано allowed_updates=types.AllowedUpdates()
             break  # Если polling завершился без ошибок, выходим из цикла
         except apihelper.ApiTelegramException as e:
             if e.error_code == 409:  # Конфликт getUpdates
