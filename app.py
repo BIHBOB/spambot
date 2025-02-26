@@ -18,7 +18,7 @@ except ImportError as e:
     sys.exit(1)
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')  # Установлен DEBUG для диагностики
 logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения
@@ -31,8 +31,8 @@ if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен")
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
-RENDER_PUBLIC_DOMAIN = os.getenv('RENDER_EXTERNAL_URL', 'your-app-name.onrender.com')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL', f"https://{RENDER_PUBLIC_DOMAIN}")
+RENDER_PUBLIC_DOMAIN = "spambot-jx8n.onrender.com"  # Указан конкретный домен Render
+WEBHOOK_URL = f"https://{RENDER_PUBLIC_DOMAIN}"
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_FULL_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
@@ -374,10 +374,12 @@ def setup_webhook():
     retries = 0
     while retries < max_retries:
         try:
-            bot.remove_webhook()
-            time.sleep(1)
+            logger.debug(f"Попытка установки вебхука: {WEBHOOK_FULL_URL}")
+            bot.remove_webhook()  # Удаляем старый вебхук, если есть
+            time.sleep(1)  # Задержка для стабильности
             bot.set_webhook(url=WEBHOOK_FULL_URL)
             webhook_info = bot.get_webhook_info()
+            logger.debug(f"Информация о вебхуке: {webhook_info}")
             if webhook_info.url == WEBHOOK_FULL_URL:
                 logger.info(f"Webhook успешно установлен: {WEBHOOK_FULL_URL}")
                 return True
