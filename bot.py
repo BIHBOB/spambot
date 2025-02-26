@@ -4,7 +4,7 @@ import vk_api
 import time
 import threading
 import requests
-from telebot import types
+from telebot import types, apihelper
 from dotenv import load_dotenv
 import signal
 import sys
@@ -198,7 +198,7 @@ def set_delete_time_prompt(message):
     markup.add(
         types.InlineKeyboardButton("15 сек", callback_data="delete_15"),
         types.InlineKeyboardButton("30 сек", callback_data="delete_30"),
-        types.InlineKeyboardButton("1 мин", callback_data="delete_60"),
+        types.InlineKeyboardButton("1 мин", callback_data="delay_60"),
         types.InlineKeyboardButton("5 мин", callback_data="delete_300")
     )
     logger.info(f"Пользователь {message.chat.id} запросил установку времени удаления")
@@ -395,18 +395,49 @@ def handle_clear_confirmation(call):
                               text="Очистка отменена.", reply_markup=main_menu())
     bot.answer_callback_query(call.id)
 
+# Функция для безопасного поллинга с обработкой ошибок 409
+def start_safe_polling():
+    global bot_started
+    retry_delay = 5  # Задержка перед повторной попыткой (секунды)
+    max_retries = 5  # Максимальное количество попыток
+
+    while bot_started:
+        try:
+            logger.info("Запуск безопасного поллинга Telegram...")
+            bot.polling(none_stop=True)
+            break  # Если polling завершился без ошибок, выходим из цикла
+        except apihelper.ApiTelegramException as e:
+            if e.error_code == 409:  # Конфликт getUpdates
+                logger.error(f"Ошибка 409: Конфликт с другим экземпляром бота. Ожидание {retry_delay} секунд перед повторной попыткой.")
+                if max_retries > 0:
+                    max_retries -= 1
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error("Превышено максимальное количество попыток восстановления после ошибки 409. Завершение работы бота.")
+                    bot_started = False
+                    break
+            else:
+                logger.error(f"Необработанная ошибка Telegram API: {str(e)}")
+                bot_started = False
+                break
+        except Exception as e:
+            logger.error(f"Неизвестная ошибка при поллинге: {str(e)}")
+            bot_started = False
+            break
+
 # Обработка сигналов для graceful shutdown
 def signal_handler(sig, frame):
     global bot_started
     logger.info('Получен сигнал для завершения...')
-    bot_started = False  # Останавливаем пингование
+    bot_started = False  # Останавливаем пингование и поллинг
     bot.stop_polling()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# Запуск бота с пингованием
+# Запуск бота с пингованием и безопасным поллингом
 if __name__ == "__main__":
     logger.info("Бот запущен")
     bot_started = True  # Устанавливаем флаг, что бот запущен
@@ -415,8 +446,9 @@ if __name__ == "__main__":
     ping_thread = threading.Thread(target=ping_service, daemon=True)
     ping_thread.start()
 
+    # Запуск безопасного поллинга
     try:
-        bot.polling(none_stop=True)
+        start_safe_polling()
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {str(e)}")
         bot_started = False  # Останавливаем пингование при ошибке
