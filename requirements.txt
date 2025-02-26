@@ -1,6 +1,6 @@
-telebot
-vk_api
-flask
-python-dotenv
-requests
-gunicorn
+Flask==2.3.3
+pyTelegramBotAPI==4.14.0
+vk-api==11.9.9
+requests==2.31.0
+python-dotenv==1.0.0
+gunicorn==21.2.0
