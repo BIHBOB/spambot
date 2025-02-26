@@ -277,6 +277,7 @@ def remove_chat_prompt(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("remove_") or call.data in ["cancel_remove", "no_chats"])
 def handle_remove_chat(call):
+    logger.info(f"Обработка callback-запроса: {call.data}")
     if call.data == "no_chats":
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
                               text="Нет чатов для удаления.", reply_markup=main_menu())
@@ -285,6 +286,7 @@ def handle_remove_chat(call):
                               text="Удаление чата отменено.", reply_markup=main_menu())
     elif call.data.startswith("remove_group_"):
         group_id = int(call.data.split("_")[2])
+        logger.debug(f"Попытка удалить группу {group_id}")
         if group_id in VK_Groups:
             VK_Groups.remove(group_id)
             logger.info(f"Группа {group_id} удалена пользователем {call.message.chat.id}")
@@ -296,6 +298,7 @@ def handle_remove_chat(call):
                                   text=f"Группа {group_id} не найдена в списке.", reply_markup=main_menu())
     elif call.data.startswith("remove_conversation_"):
         conv_id = int(call.data.split("_")[2])
+        logger.debug(f"Попытка удалить беседу {conv_id}")
         if conv_id in VK_CONVERSATIONS:
             VK_CONVERSATIONS.remove(conv_id)
             logger.info(f"Беседа {conv_id} удалена пользователем {call.message.chat.id}")
@@ -404,7 +407,7 @@ def start_safe_polling():
     while bot_started:
         try:
             logger.info("Запуск безопасного поллинга Telegram...")
-            bot.polling(none_stop=True)
+            bot.polling(none_stop=True, allowed_updates=types.AllowedUpdates())  # Указываем все обновления
             break  # Если polling завершился без ошибок, выходим из цикла
         except apihelper.ApiTelegramException as e:
             if e.error_code == 409:  # Конфликт getUpdates
