@@ -1,0 +1,4 @@
+telebot
+vk-api
+python-dotenv
+requests
