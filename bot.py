@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import signal
 import sys
 import logging
+import uuid
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -24,6 +25,10 @@ if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен")
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
+
+# Уникальный идентификатор экземпляра бота
+INSTANCE_ID = str(uuid.uuid4())
+logger.info(f"Запущен экземпляр бота с ID: {INSTANCE_ID}")
 
 # Инициализация бота Telegram
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -130,7 +135,7 @@ def start_spam_groups(message):
         return
     SPAM_RUNNING['groups'] = True
     SPAM_THREADS['groups'] = []
-    for chat_id in VK_Groups[:]:  # Копия списка
+    for chat_id in VK_Groups[:]:
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
         thread.start()
         SPAM_THREADS['groups'].append(thread)
@@ -147,7 +152,7 @@ def start_spam_conversations(message):
         return
     SPAM_RUNNING['conversations'] = True
     SPAM_THREADS['conversations'] = []
-    for chat_id in VK_CONVERSATIONS[:]:  # Копия списка
+    for chat_id in VK_CONVERSATIONS[:]:
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
         thread.start()
         SPAM_THREADS['conversations'].append(thread)
@@ -243,7 +248,7 @@ def handle_remove_chat(call):
     elif call.data.startswith("remove_group_"):
         group_id = int(call.data.split("_")[2])
         if group_id in VK_Groups:
-            VK_Groups = [x for x in VK_Groups if x != group_id]  # Обновляем список
+            VK_Groups = [x for x in VK_Groups if x != group_id]
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
                                 text=f"Группа {group_id} удалена.", reply_markup=None)
         else:
@@ -252,7 +257,7 @@ def handle_remove_chat(call):
     elif call.data.startswith("remove_conversation_"):
         conv_id = int(call.data.split("_")[2])
         if conv_id in VK_CONVERSATIONS:
-            VK_CONVERSATIONS = [x for x in VK_CONVERSATIONS if x != conv_id]  # Обновляем список
+            VK_CONVERSATIONS = [x for x in VK_CONVERSATIONS if x != conv_id]
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
                                 text=f"Беседа {conv_id} удалена.", reply_markup=None)
         else:
@@ -329,26 +334,44 @@ def handle_clear_confirmation(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Поллинг с обработкой ошибок
+# Поллинг с предотвращением конфликтов
 def start_safe_polling():
     global bot_started
     bot_started = True
-    while bot_started:
+    retry_count = 0
+    max_retries = 5
+
+    # Очистка вебхука перед началом
+    try:
+        bot.remove_webhook()
+        logger.info("Вебхук успешно удалён")
+        time.sleep(1)  # Даём время на завершение предыдущих сессий
+    except Exception as e:
+        logger.error(f"Ошибка при удалении вебхука: {str(e)}")
+
+    while bot_started and retry_count < max_retries:
         try:
-            bot.remove_webhook()  # Удаляем вебхук если есть
+            logger.info(f"Запуск поллинга для экземпляра {INSTANCE_ID}")
             bot.polling(none_stop=True, interval=0, timeout=20)
+            break  # Если polling успешен, выходим из цикла
         except apihelper.ApiTelegramException as e:
             if e.error_code == 409:
-                logger.error("Конфликт 409: другой экземпляр бота работает")
-                time.sleep(5)
-                bot.remove_webhook()
+                retry_count += 1
+                logger.error(f"Ошибка 409: Конфликт getUpdates (попытка {retry_count}/{max_retries})")
+                bot.stop_polling()  # Явно останавливаем предыдущий поллинг
+                time.sleep(5 * retry_count)  # Экспоненциальная задержка
+                bot.remove_webhook()  # Повторная очистка вебхука
                 continue
             else:
-                logger.error(f"Ошибка Telegram API: {str(e)}")
+                logger.error(f"Необрабатываемая ошибка Telegram API: {str(e)}")
                 break
         except Exception as e:
-            logger.error(f"Неизвестная ошибка: {str(e)}")
+            logger.error(f"Неизвестная ошибка при поллинге: {str(e)}")
             break
+    
+    if retry_count >= max_retries:
+        logger.error("Превышено количество попыток запуска поллинга. Завершение работы.")
+        bot_started = False
 
 # Обработка сигналов
 def signal_handler(sig, frame):
