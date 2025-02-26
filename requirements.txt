@@ -1,4 +1,4 @@
-telebot>=4.7.0
+telebot
 vk-api
 python-dotenv
 requests
