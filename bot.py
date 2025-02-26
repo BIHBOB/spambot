@@ -14,12 +14,10 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Загрузка переменных окружения из .env (для совместимости, но токен Telegram вставлен напрямую ниже)
+# Загрузка переменных окружения из .env
 load_dotenv()
 
 # Токены для Telegram и VK
-# Временное решение: вставляем токен Telegram напрямую для тестирования на Render
-# В продакшене рекомендуется настроить TELEGRAM_TOKEN в переменных окружения на Render для безопасности
 TELEGRAM_TOKEN = '7506083870:AAFePsqVIvR-8iKfZ9QAc43n7MFqvQKJEMA'
 if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     logger.error("TELEGRAM_TOKEN не задан или содержит пробелы. Убедитесь, что он правильно настроен в переменных окружения.")
@@ -58,6 +56,7 @@ def main_menu():
         types.KeyboardButton("➕ Добавить чат"),
         types.KeyboardButton("✍️ Шаблон для спама"),
         types.KeyboardButton("🔑 Сменить токен VK"),
+        types.KeyboardButton("🗑 Удалить чат"),
         types.KeyboardButton("🗑 Очистить API VK")
     )
     return markup
@@ -75,8 +74,24 @@ def spam_menu(spam_type):
         types.KeyboardButton("➕ Добавить чат"),
         types.KeyboardButton("✍️ Шаблон для спама"),
         types.KeyboardButton("🔑 Сменить токен VK"),
+        types.KeyboardButton("🗑 Удалить чат"),
         types.KeyboardButton("🗑 Очистить API VK")
     )
+    return markup
+
+# Функция для создания клавиатуры удаления чата
+def create_remove_chat_keyboard():
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    if VK_Groups or VK_CONVERSATIONS:
+        # Добавляем группы
+        for group_id in VK_Groups:
+            markup.add(types.InlineKeyboardButton(f"Группа {group_id}", callback_data=f"remove_group_{group_id}"))
+        # Добавляем беседы
+        for conv_id in VK_CONVERSATIONS:
+            markup.add(types.InlineKeyboardButton(f"Беседа {conv_id}", callback_data=f"remove_conversation_{conv_id}"))
+        markup.add(types.InlineKeyboardButton("Отмена", callback_data="cancel_remove"))
+    else:
+        markup.add(types.InlineKeyboardButton("Нет чатов для удаления", callback_data="no_chats"))
     return markup
 
 # Функция спама
@@ -252,6 +267,45 @@ def add_chat(message):
     except ValueError:
         logger.error(f"Некорректный ввод ID от пользователя {message.chat.id}")
         bot.send_message(message.chat.id, "ID — число!", reply_markup=main_menu())
+
+# Удалить чат
+@bot.message_handler(func=lambda message: message.text == "🗑 Удалить чат")
+def remove_chat_prompt(message):
+    logger.info(f"Пользователь {message.chat.id} запросил удаление чата")
+    markup = create_remove_chat_keyboard()
+    bot.send_message(message.chat.id, "Выберите чат для удаления:", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("remove_") or call.data in ["cancel_remove", "no_chats"])
+def handle_remove_chat(call):
+    if call.data == "no_chats":
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                              text="Нет чатов для удаления.", reply_markup=main_menu())
+    elif call.data == "cancel_remove":
+        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                              text="Удаление чата отменено.", reply_markup=main_menu())
+    elif call.data.startswith("remove_group_"):
+        group_id = int(call.data.split("_")[2])
+        if group_id in VK_Groups:
+            VK_Groups.remove(group_id)
+            logger.info(f"Группа {group_id} удалена пользователем {call.message.chat.id}")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                  text=f"Группа {group_id} удалена из списка.", reply_markup=main_menu())
+        else:
+            logger.warning(f"Группа {group_id} не найдена в списке для пользователя {call.message.chat.id}")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                  text=f"Группа {group_id} не найдена в списке.", reply_markup=main_menu())
+    elif call.data.startswith("remove_conversation_"):
+        conv_id = int(call.data.split("_")[2])
+        if conv_id in VK_CONVERSATIONS:
+            VK_CONVERSATIONS.remove(conv_id)
+            logger.info(f"Беседа {conv_id} удалена пользователем {call.message.chat.id}")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                  text=f"Беседа {conv_id} удалена из списка.", reply_markup=main_menu())
+        else:
+            logger.warning(f"Беседа {conv_id} не найдена в списке для пользователя {call.message.chat.id}")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
+                                  text=f"Беседа {conv_id} не найдена в списке.", reply_markup=main_menu())
+    bot.answer_callback_query(call.id)
 
 # Шаблон для спама
 @bot.message_handler(func=lambda message: message.text == "✍️ Шаблон для спама")
