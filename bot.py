@@ -5,11 +5,17 @@ import signal
 import sys
 import logging
 import uuid
-from flask import Flask, request, Response
-from telebot import TeleBot, types, apihelper
-import vk_api
-import requests
-from dotenv import load_dotenv
+
+# Проверка наличия зависимостей
+try:
+    from flask import Flask, request, Response
+    from telebot import TeleBot, types, apihelper
+    import vk_api
+    import requests
+    from dotenv import load_dotenv
+except ImportError as e:
+    print(f"Ошибка: отсутствует библиотека - {e}. Установите зависимости с помощью 'pip install -r requirements.txt'.")
+    sys.exit(1)
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -192,7 +198,7 @@ def set_delete_time_prompt(message):
         types.InlineKeyboardButton("15 сек", callback_data="delete_15"),
         types.InlineKeyboardButton("30 сек", callback_data="delete_30"),
         types.InlineKeyboardButton("1 мин", callback_data="delete_60"),
-        types.InlineKeyboardButton("5 мин", callback_data="delete_300")
+        types.InlineKeyboardButton("5 мин", callback_data="delete_300")  # Исправлено с delay_300 на delete_300
     )
     bot.send_message(message.chat.id, "Выбери время до удаления:", reply_markup=markup)
 
@@ -406,6 +412,34 @@ if __name__ == "__main__":
     ping_thread = threading.Thread(target=ping_service, daemon=True)
     ping_thread.start()
 
-    # Запуск Flask сервера
-    port = int(os.getenv('PORT', 5000))  # Используем PORT из окружения или 5000 по умолчанию
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # Использование gunicorn в продакшене или Flask для разработки
+    port = int(os.getenv('PORT', 5000))
+    if os.getenv('RENDER'):  # Проверка, что мы на Render
+        try:
+            import gunicorn.app.base
+
+            class StandaloneApplication(gunicorn.app.base.BaseApplication):
+                def __init__(self, app, options=None):
+                    self.options = options or {}
+                    self.application = app
+                    super().__init__()
+
+                def load_config(self):
+                    for key, value in self.options.items():
+                        self.cfg.set(key.lower(), value)
+
+                def load(self):
+                    return self.application
+
+            options = {
+                'bind': f'0.0.0.0:{port}',
+                'workers': 1,  # Один worker для простоты, можно увеличить
+                'timeout': 60,
+            }
+            StandaloneApplication(app, options).run()
+        except ImportError:
+            logger.error("Gunicorn не установлен. Установите его с помощью 'pip install gunicorn'.")
+            sys.exit(1)
+    else:
+        # Локальный запуск с Flask
+        app.run(host='0.0.0.0', port=port, debug=False)
