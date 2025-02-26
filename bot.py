@@ -348,9 +348,8 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 # Запуск бота с пингованием
 if __name__ == "__main__":
-    global bot_started
     logger.info("Бот запущен")
-    bot_started = True
+    bot_started = True  # Устанавливаем флаг, что бот запущен
 
     # Запуск пингования в отдельном потоке
     ping_thread = threading.Thread(target=ping_service, daemon=True)
