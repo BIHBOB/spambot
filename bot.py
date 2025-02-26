@@ -1,15 +1,15 @@
 import os
-import telebot
-import vk_api
-import time
 import threading
-import requests
-from telebot import types, apihelper
-from dotenv import load_dotenv
+import time
 import signal
 import sys
 import logging
 import uuid
+from flask import Flask, request, Response
+from telebot import TeleBot, types, apihelper
+import vk_api
+import requests
+from dotenv import load_dotenv
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -18,20 +18,26 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Токены
+# Токены и конфигурация
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     logger.error("TELEGRAM_TOKEN не задан или содержит пробелы")
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен")
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://your-app-name.onrender.com')  # Замените на ваш URL
+WEBHOOK_PATH = '/webhook'
+WEBHOOK_FULL_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
 # Уникальный идентификатор экземпляра
 INSTANCE_ID = str(uuid.uuid4())
 logger.info(f"Запущен экземпляр бота с ID: {INSTANCE_ID}")
 
+# Инициализация Flask приложения
+app = Flask(__name__)
+
 # Инициализация бота Telegram
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)  # Отключаем многопоточность
+bot = TeleBot(TELEGRAM_TOKEN, threaded=False)
 
 # Инициализация VK API
 vk_session = vk_api.VkApi(token=VK_TOKEN) if VK_TOKEN else None
@@ -103,20 +109,20 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)}")
             break
 
-# Пингование
+# Самопингование для поддержания активности
 def ping_service():
     global bot_started
-    PING_URL = "https://httpbin.org/status/200"
-    PING_INTERVAL = 300
+    PING_URL = os.getenv('PING_URL', 'https://httpbin.org/status/200')
+    PING_INTERVAL = 300  # 5 минут
     while bot_started:
         try:
             response = requests.get(PING_URL, timeout=10)
-            logger.info(f"Пинг: статус {response.status_code}")
+            logger.debug(f"Пинг: статус {response.status_code}")
         except Exception as e:
             logger.error(f"Ошибка пинга: {str(e)}")
         time.sleep(PING_INTERVAL)
 
-# Обработчики (оставляем без изменений для краткости, они работают корректно)
+# Обработчики сообщений
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     logger.info(f"Пользователь {message.chat.id} запустил бота")
@@ -158,9 +164,14 @@ def start_spam_conversations(message):
 
 @bot.message_handler(func=lambda message: message.text == "⛔ Отключить спам")
 def stop_spam(message):
-    global SPAM_RUNNING
+    global SPAM_RUNNING, SPAM_THREADS
     SPAM_RUNNING['groups'] = False
     SPAM_RUNNING['conversations'] = False
+    for thread_type in SPAM_THREADS:
+        for thread in SPAM_THREADS[thread_type][:]:
+            if thread.is_alive():
+                thread.join(timeout=5)
+    SPAM_THREADS = {'groups': [], 'conversations': []}
     bot.send_message(message.chat.id, "Спам остановлен!", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "⏳ Установить задержку")
@@ -246,7 +257,7 @@ def handle_remove_chat(call):
     elif call.data.startswith("remove_group_"):
         group_id = int(call.data.split("_")[2])
         if group_id in VK_Groups:
-            VK_Groups = [x for x in VK_Groups if x != group_id]
+            VK_Groups.remove(group_id)
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
                                 text=f"Группа {group_id} удалена.", reply_markup=None)
         else:
@@ -255,7 +266,7 @@ def handle_remove_chat(call):
     elif call.data.startswith("remove_conversation_"):
         conv_id = int(call.data.split("_")[2])
         if conv_id in VK_CONVERSATIONS:
-            VK_CONVERSATIONS = [x for x in VK_CONVERSATIONS if x != conv_id]
+            VK_CONVERSATIONS.remove(conv_id)
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
                                 text=f"Беседа {conv_id} удалена.", reply_markup=None)
         else:
@@ -311,10 +322,10 @@ def handle_clear_confirmation(call):
     global VK_TOKEN, vk_session, vk, VK_Groups, VK_CONVERSATIONS, DELAY_TIME, DELETE_TIME, SPAM_TEMPLATE, SPAM_RUNNING, SPAM_THREADS
     if call.data == "confirm_clear":
         SPAM_RUNNING['groups'] = SPAM_RUNNING['conversations'] = False
-        for threads in SPAM_THREADS.values():
-            for thread in threads[:]:
+        for thread_type in SPAM_THREADS:
+            for thread in SPAM_THREADS[thread_type][:]:
                 if thread.is_alive():
-                    thread.join()
+                    thread.join(timeout=5)
         SPAM_THREADS = {'groups': [], 'conversations': []}
         VK_TOKEN = ''
         vk_session = None
@@ -332,63 +343,69 @@ def handle_clear_confirmation(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Поллинг с усиленной защитой от конфликтов
-def start_safe_polling():
-    global bot_started
-    bot_started = True
-    retry_count = 0
+# Вебхук обработчик
+@app.route(WEBHOOK_PATH, methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = types.Update.de_json(json_string)
+        logger.debug(f"Получено обновление: {json_string}")
+        bot.process_new_updates([update])
+        return Response('OK', status=200)
+    else:
+        return Response('Invalid content type', status=403)
+
+@app.route('/')
+def index():
+    return "Бот работает!"
+
+# Функция настройки вебхука
+def setup_webhook():
     max_retries = 5
-
-    # Очистка вебхука и старых сессий
-    try:
-        bot.remove_webhook()
-        logger.info("Вебхук удалён перед запуском поллинга")
-        bot.stop_polling()  # Останавливаем любые существующие сессии
-        time.sleep(2)  # Даём время на завершение
-    except Exception as e:
-        logger.error(f"Ошибка при очистке вебхука: {str(e)}")
-
-    while bot_started and retry_count < max_retries:
+    retries = 0
+    while retries < max_retries:
         try:
-            logger.info(f"Запуск поллинга для экземпляра {INSTANCE_ID}, попытка {retry_count + 1}")
-            bot.polling(none_stop=True, interval=0, timeout=20)
-            break  # Успешный запуск, выходим
-        except apihelper.ApiTelegramException as e:
-            if e.error_code == 409:
-                retry_count += 1
-                logger.error(f"Ошибка 409: конфликт getUpdates (попытка {retry_count}/{max_retries})")
-                bot.stop_polling()
-                time.sleep(5 * retry_count)  # Увеличиваем задержку
-                try:
-                    bot.remove_webhook()  # Ещё раз очищаем вебхук
-                    logger.info("Повторная очистка вебхука перед новой попыткой")
-                except Exception as e:
-                    logger.error(f"Ошибка при повторной очистке вебхука: {str(e)}")
-                continue
+            bot.remove_webhook()
+            time.sleep(1)  # Даем время на очистку
+            bot.set_webhook(url=WEBHOOK_FULL_URL)
+            webhook_info = bot.get_webhook_info()
+            if webhook_info.url == WEBHOOK_FULL_URL:
+                logger.info(f"Webhook успешно установлен: {WEBHOOK_FULL_URL}")
+                return True
             else:
-                logger.error(f"Другая ошибка Telegram API: {str(e)}")
-                break
+                logger.warning(f"Webhook не совпадает: {webhook_info.url}")
         except Exception as e:
-            logger.error(f"Неизвестная ошибка: {str(e)}")
-            break
-
-    if retry_count >= max_retries:
-        logger.error("Превышено количество попыток. Рекомендуется проверить, не запущен ли бот где-то ещё.")
-        bot_started = False
+            retries += 1
+            logger.error(f"Ошибка установки webhook (попытка {retries}/{max_retries}): {str(e)}")
+            time.sleep(5 * retries)
+    logger.error("Не удалось установить webhook")
+    return False
 
 # Обработка сигналов
 def signal_handler(sig, frame):
     global bot_started
     logger.info(f"Завершение экземпляра {INSTANCE_ID}")
     bot_started = False
-    bot.stop_polling()
+    bot.remove_webhook()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
+# Запуск бота
 if __name__ == "__main__":
-    logger.info(f"Бот запущен, экземпляр: {INSTANCE_ID}")
+    logger.info(f"Запуск бота, экземпляр: {INSTANCE_ID}")
+    bot_started = True
+
+    # Установка вебхука
+    if not setup_webhook():
+        logger.error("Не удалось настроить вебхук. Завершение.")
+        sys.exit(1)
+
+    # Запуск пингования в отдельном потоке
     ping_thread = threading.Thread(target=ping_service, daemon=True)
     ping_thread.start()
-    start_safe_polling()
+
+    # Запуск Flask сервера
+    port = int(os.getenv('PORT', 5000))  # Используем PORT из окружения или 5000 по умолчанию
+    app.run(host='0.0.0.0', port=port, debug=False)
