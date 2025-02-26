@@ -26,12 +26,12 @@ if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
 
-# Уникальный идентификатор экземпляра бота
+# Уникальный идентификатор экземпляра
 INSTANCE_ID = str(uuid.uuid4())
 logger.info(f"Запущен экземпляр бота с ID: {INSTANCE_ID}")
 
 # Инициализация бота Telegram
-bot = telebot.TeleBot(TELEGRAM_TOKEN)
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)  # Отключаем многопоточность
 
 # Инициализация VK API
 vk_session = vk_api.VkApi(token=VK_TOKEN) if VK_TOKEN else None
@@ -93,11 +93,9 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
             if not vk:
                 raise Exception("VK API не инициализирован")
             msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
-            logger.info(f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
             bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
             time.sleep(DELETE_TIME)
             vk.messages.delete(message_ids=[msg1], delete_for_all=1)
-            logger.info(f"Удалено сообщение в VK чат {chat_id}")
             bot.send_message(telegram_chat_id, f"Удалено сообщение в VK чат {chat_id}")
             time.sleep(max(0, DELAY_TIME - DELETE_TIME))
         except Exception as e:
@@ -118,11 +116,11 @@ def ping_service():
             logger.error(f"Ошибка пинга: {str(e)}")
         time.sleep(PING_INTERVAL)
 
-# Обработчики
+# Обработчики (оставляем без изменений для краткости, они работают корректно)
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     logger.info(f"Пользователь {message.chat.id} запустил бота")
-    bot.send_message(message.chat.id, "Привет! Я бот для спама в VK.", reply_markup=main_menu())
+    bot.send_message(message.chat.id, f"Привет! Я бот для спама в VK. Экземпляр: {INSTANCE_ID}", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "🚀 Спам в группы")
 def start_spam_groups(message):
@@ -209,7 +207,7 @@ def set_delete_time_callback(call):
 def status(message):
     groups_str = ", ".join(map(str, VK_Groups)) if VK_Groups else "Пусто"
     convs_str = ", ".join(map(str, VK_CONVERSATIONS)) if VK_CONVERSATIONS else "Пусто"
-    status_msg = f"Задержка: {DELAY_TIME} сек\nВремя удаления: {DELETE_TIME} сек\nШаблон: '{SPAM_TEMPLATE}'\nГруппы: {groups_str}\nБеседы: {convs_str}"
+    status_msg = f"Задержка: {DELAY_TIME} сек\nВремя удаления: {DELETE_TIME} сек\nШаблон: '{SPAM_TEMPLATE}'\nГруппы: {groups_str}\nБеседы: {convs_str}\nЭкземпляр: {INSTANCE_ID}"
     bot.send_message(message.chat.id, status_msg, reply_markup=main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "➕ Добавить чат")
@@ -334,49 +332,54 @@ def handle_clear_confirmation(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Поллинг с предотвращением конфликтов
+# Поллинг с усиленной защитой от конфликтов
 def start_safe_polling():
     global bot_started
     bot_started = True
     retry_count = 0
     max_retries = 5
 
-    # Очистка вебхука перед началом
+    # Очистка вебхука и старых сессий
     try:
         bot.remove_webhook()
-        logger.info("Вебхук успешно удалён")
-        time.sleep(1)  # Даём время на завершение предыдущих сессий
+        logger.info("Вебхук удалён перед запуском поллинга")
+        bot.stop_polling()  # Останавливаем любые существующие сессии
+        time.sleep(2)  # Даём время на завершение
     except Exception as e:
-        logger.error(f"Ошибка при удалении вебхука: {str(e)}")
+        logger.error(f"Ошибка при очистке вебхука: {str(e)}")
 
     while bot_started and retry_count < max_retries:
         try:
-            logger.info(f"Запуск поллинга для экземпляра {INSTANCE_ID}")
+            logger.info(f"Запуск поллинга для экземпляра {INSTANCE_ID}, попытка {retry_count + 1}")
             bot.polling(none_stop=True, interval=0, timeout=20)
-            break  # Если polling успешен, выходим из цикла
+            break  # Успешный запуск, выходим
         except apihelper.ApiTelegramException as e:
             if e.error_code == 409:
                 retry_count += 1
-                logger.error(f"Ошибка 409: Конфликт getUpdates (попытка {retry_count}/{max_retries})")
-                bot.stop_polling()  # Явно останавливаем предыдущий поллинг
-                time.sleep(5 * retry_count)  # Экспоненциальная задержка
-                bot.remove_webhook()  # Повторная очистка вебхука
+                logger.error(f"Ошибка 409: конфликт getUpdates (попытка {retry_count}/{max_retries})")
+                bot.stop_polling()
+                time.sleep(5 * retry_count)  # Увеличиваем задержку
+                try:
+                    bot.remove_webhook()  # Ещё раз очищаем вебхук
+                    logger.info("Повторная очистка вебхука перед новой попыткой")
+                except Exception as e:
+                    logger.error(f"Ошибка при повторной очистке вебхука: {str(e)}")
                 continue
             else:
-                logger.error(f"Необрабатываемая ошибка Telegram API: {str(e)}")
+                logger.error(f"Другая ошибка Telegram API: {str(e)}")
                 break
         except Exception as e:
-            logger.error(f"Неизвестная ошибка при поллинге: {str(e)}")
+            logger.error(f"Неизвестная ошибка: {str(e)}")
             break
-    
+
     if retry_count >= max_retries:
-        logger.error("Превышено количество попыток запуска поллинга. Завершение работы.")
+        logger.error("Превышено количество попыток. Рекомендуется проверить, не запущен ли бот где-то ещё.")
         bot_started = False
 
 # Обработка сигналов
 def signal_handler(sig, frame):
     global bot_started
-    logger.info('Завершение работы...')
+    logger.info(f"Завершение экземпляра {INSTANCE_ID}")
     bot_started = False
     bot.stop_polling()
     sys.exit(0)
@@ -385,7 +388,7 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 if __name__ == "__main__":
-    logger.info("Бот запущен")
+    logger.info(f"Бот запущен, экземпляр: {INSTANCE_ID}")
     ping_thread = threading.Thread(target=ping_service, daemon=True)
     ping_thread.start()
     start_safe_polling()
