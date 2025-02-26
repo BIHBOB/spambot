@@ -53,8 +53,8 @@ vk = vk_session.get_api() if vk_session else None
 # Глобальные переменные
 VK_Groups = [-211223344, -155667788, -199887766, -188445566, -177334455]
 VK_CONVERSATIONS = [2000000001, 2000000005]
-DELAY_TIME = 15  # Минимизируем для экономии ресурсов
-DELETE_TIME = 15  # Минимизируем для экономии ресурсов
+DELAY_TIME = 15
+DELETE_TIME = 15
 SPAM_RUNNING = {'groups': False, 'conversations': False}
 SPAM_THREADS = {'groups': [], 'conversations': []}
 SPAM_TEMPLATE = "Первое сообщение"
