@@ -5,13 +5,13 @@ import signal
 import sys
 import logging
 import uuid
+import requests
 
 # Проверка наличия зависимостей
 try:
     from flask import Flask, request, Response
     from telebot import TeleBot, types
     import vk_api
-    import requests
     from dotenv import load_dotenv
 except ImportError as e:
     print(f"Ошибка: отсутствует библиотека - {e}. Установите зависимости с помощью 'pip install -r requirements.txt'.")
@@ -31,9 +31,8 @@ if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен")
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
-# Railway предоставляет публичный домен через переменную окружения
-RAILWAY_PUBLIC_DOMAIN = os.getenv('RAILWAY_PUBLIC_DOMAIN', 'your-app-name.railway.app')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL', f"https://{RAILWAY_PUBLIC_DOMAIN}")
+RENDER_PUBLIC_DOMAIN = os.getenv('RENDER_EXTERNAL_URL', 'your-app-name.onrender.com')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', f"https://{RENDER_PUBLIC_DOMAIN}")
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_FULL_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
@@ -54,8 +53,8 @@ vk = vk_session.get_api() if vk_session else None
 # Глобальные переменные
 VK_Groups = [-211223344, -155667788, -199887766, -188445566, -177334455]
 VK_CONVERSATIONS = [2000000001, 2000000005]
-DELAY_TIME = 15
-DELETE_TIME = 15
+DELAY_TIME = 15  # Минимизируем для экономии ресурсов
+DELETE_TIME = 15  # Минимизируем для экономии ресурсов
 SPAM_RUNNING = {'groups': False, 'conversations': False}
 SPAM_THREADS = {'groups': [], 'conversations': []}
 SPAM_TEMPLATE = "Первое сообщение"
@@ -117,14 +116,14 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)}")
             break
 
-# Самопингование для поддержания активности
+# Самопингование для антизасыпания
 def ping_service():
     global bot_started
-    PING_URL = os.getenv('PING_URL', 'https://httpbin.org/status/200')
-    PING_INTERVAL = 300  # 5 минут
+    PING_URL = os.getenv('PING_URL', f"https://{RENDER_PUBLIC_DOMAIN}")
+    PING_INTERVAL = 900  # 15 минут
     while bot_started:
         try:
-            response = requests.get(PING_URL, timeout=10)
+            response = requests.head(PING_URL, timeout=5)  # Используем HEAD для экономии трафика
             logger.debug(f"Пинг: статус {response.status_code}")
         except Exception as e:
             logger.error(f"Ошибка пинга: {str(e)}")
@@ -149,6 +148,7 @@ def start_spam_groups(message):
     SPAM_THREADS['groups'] = []
     for chat_id in VK_Groups[:]:
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
+        thread.daemon = True  # Потоки завершаются вместе с основным процессом
         thread.start()
         SPAM_THREADS['groups'].append(thread)
     bot.send_message(message.chat.id, "Спам запущен в группах VK!", reply_markup=spam_menu('groups'))
@@ -166,6 +166,7 @@ def start_spam_conversations(message):
     SPAM_THREADS['conversations'] = []
     for chat_id in VK_CONVERSATIONS[:]:
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
+        thread.daemon = True
         thread.start()
         SPAM_THREADS['conversations'].append(thread)
     bot.send_message(message.chat.id, "Спам запущен в беседах VK!", reply_markup=spam_menu('conversations'))
@@ -369,7 +370,7 @@ def index():
 
 # Функция настройки вебхука
 def setup_webhook():
-    max_retries = 5
+    max_retries = 3
     retries = 0
     while retries < max_retries:
         try:
@@ -385,7 +386,7 @@ def setup_webhook():
         except Exception as e:
             retries += 1
             logger.error(f"Ошибка установки webhook (попытка {retries}/{max_retries}): {str(e)}")
-            time.sleep(5 * retries)
+            time.sleep(2 * retries)
     logger.error("Не удалось установить webhook")
     return False
 
@@ -399,6 +400,19 @@ def signal_handler(sig, frame):
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
+
+# Функция для самопингования
+def ping_service():
+    global bot_started
+    PING_URL = os.getenv('PING_URL', f"https://{RENDER_PUBLIC_DOMAIN}")
+    PING_INTERVAL = 900  # 15 минут
+    while bot_started:
+        try:
+            response = requests.head(PING_URL, timeout=5)  # Используем HEAD для экономии трафика
+            logger.debug(f"Пинг: статус {response.status_code}")
+        except Exception as e:
+            logger.error(f"Ошибка пинга: {str(e)}")
+        time.sleep(PING_INTERVAL)
 
 # Запуск бота
 if __name__ == "__main__":
@@ -414,30 +428,6 @@ if __name__ == "__main__":
     ping_thread = threading.Thread(target=ping_service, daemon=True)
     ping_thread.start()
 
-    # Использование Gunicorn для Railway
-    port = int(os.getenv('PORT', 5000))
-    try:
-        from gunicorn.app.base import BaseApplication
-
-        class StandaloneApplication(BaseApplication):
-            def __init__(self, app, options=None):
-                self.options = options or {}
-                self.application = app
-                super().__init__()
-
-            def load_config(self):
-                for key, value in self.options.items():
-                    self.cfg.set(key.lower(), value)
-
-            def load(self):
-                return self.application
-
-        options = {
-            'bind': f'0.0.0.0:{port}',
-            'workers': 1,
-            'timeout': 60,
-        }
-        StandaloneApplication(app, options).run()
-    except ImportError:
-        logger.error("Gunicorn не установлен. Установите его с помощью 'pip install gunicorn'.")
-        sys.exit(1)
+    # Настройка для Render
+    port = int(os.getenv('PORT', 10000))  # По умолчанию порт Render
+    app.run(host='0.0.0.0', port=port, debug=False)
