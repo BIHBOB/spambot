@@ -3,3 +3,4 @@ vk_api
 flask
 python-dotenv
 requests
+gunicorn
