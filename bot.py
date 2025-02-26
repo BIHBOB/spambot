@@ -14,11 +14,13 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Загрузка переменных окружения из .env
+# Загрузка переменных окружения из .env (для совместимости, но токен Telegram вставлен напрямую ниже)
 load_dotenv()
 
-# Токены для Telegram и VK с проверкой
-TELEGRAM_TOKEN = os.getenv('7506083870:AAFePsqVIvR-8iKfZ9QAc43n7MFqvQKJEMA')
+# Токены для Telegram и VK
+# Временное решение: вставляем токен Telegram напрямую для тестирования на Render
+# В продакшене рекомендуется настроить TELEGRAM_TOKEN в переменных окружения на Render для безопасности
+TELEGRAM_TOKEN = '7506083870:AAFePsqVIvR-8iKfZ9QAc43n7MFqvQKJEMA'
 if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     logger.error("TELEGRAM_TOKEN не задан или содержит пробелы. Убедитесь, что он правильно настроен в переменных окружения.")
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен. Настройте его в .env или в настройках Render.")
