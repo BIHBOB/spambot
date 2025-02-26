@@ -10,83 +10,69 @@ import signal
 import sys
 import logging
 
-# Настройка логирования для Render (логи выводятся в stdout)
+# Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Загрузка переменных окружения из .env
+# Загрузка переменных окружения
 load_dotenv()
 
-# Токены для Telegram и VK
-TELEGRAM_TOKEN = '7506083870:AAFePsqVIvR-8iKfZ9QAc43n7MFqvQKJEMA'
+# Токены
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
-    logger.error("TELEGRAM_TOKEN не задан или содержит пробелы. Убедитесь, что он правильно настроен в переменных окружения.")
-    raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен. Настройте его в .env или в настройках Render.")
+    logger.error("TELEGRAM_TOKEN не задан или содержит пробелы")
+    raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен")
 
-VK_TOKEN = os.getenv('VK_TOKEN', '')  # Значение по умолчанию — пустая строка
+VK_TOKEN = os.getenv('VK_TOKEN', '')
 
 # Инициализация бота Telegram
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 # Инициализация VK API
-vk_session = vk_api.VkApi(token=VK_TOKEN)
-vk = vk_session.get_api()
+vk_session = vk_api.VkApi(token=VK_TOKEN) if VK_TOKEN else None
+vk = vk_session.get_api() if vk_session else None
 
-# Списки для групп и бесед
-VK_Groups = [-211223344, -155667788, -199887766, -188445566, -177334455]  # Группы
-VK_CONVERSATIONS = [2000000001, 2000000005]  # Беседы
-DELAY_TIME = 15  # Задержка между действиями (секунды)
-DELETE_TIME = 15  # Время до удаления (секунды)
-SPAM_RUNNING = {'groups': False, 'conversations': False}  # Флаги спама
-SPAM_THREADS = {'groups': [], 'conversations': []}  # Потоки спама
-SPAM_TEMPLATE = "Первое сообщение"  # Шаблон по умолчанию
-
-# Глобальная переменная для отслеживания статуса бота
+# Глобальные переменные
+VK_Groups = [-211223344, -155667788, -199887766, -188445566, -177334455]
+VK_CONVERSATIONS = [2000000001, 2000000005]
+DELAY_TIME = 15
+DELETE_TIME = 15
+SPAM_RUNNING = {'groups': False, 'conversations': False}
+SPAM_THREADS = {'groups': [], 'conversations': []}
+SPAM_TEMPLATE = "Первое сообщение"
 bot_started = False
 
 # Основная клавиатура
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
-        types.KeyboardButton("🚀 Спам в группы"),
-        types.KeyboardButton("🚀 Спам в беседы"),
-        types.KeyboardButton("⏳ Установить задержку"),
-        types.KeyboardButton("🕒 Время удаления"),
-        types.KeyboardButton("ℹ️ Статус"),
-        types.KeyboardButton("➕ Добавить чат"),
-        types.KeyboardButton("✍️ Шаблон для спама"),
-        types.KeyboardButton("🔑 Сменить токен VK"),
-        types.KeyboardButton("🗑 Удалить чат"),
-        types.KeyboardButton("🗑 Очистить API VK")
+        "🚀 Спам в группы", "🚀 Спам в беседы",
+        "⏳ Установить задержку", "🕒 Время удаления",
+        "ℹ️ Статус", "➕ Добавить чат",
+        "✍️ Шаблон для спама", "🔑 Сменить токен VK",
+        "🗑 Удалить чат", "🗑 Очистить API VK"
     )
     return markup
 
-# Клавиатура с кнопкой отключения
+# Клавиатура спама
 def spam_menu(spam_type):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add(types.KeyboardButton("⛔ Отключить спам"))
+    markup.add("⛔ Отключить спам")
     markup.add(
-        types.KeyboardButton("🚀 Спам в группы"),
-        types.KeyboardButton("🚀 Спам в беседы"),
-        types.KeyboardButton("⏳ Установить задержку"),
-        types.KeyboardButton("🕒 Время удаления"),
-        types.KeyboardButton("ℹ️ Статус"),
-        types.KeyboardButton("➕ Добавить чат"),
-        types.KeyboardButton("✍️ Шаблон для спама"),
-        types.KeyboardButton("🔑 Сменить токен VK"),
-        types.KeyboardButton("🗑 Удалить чат"),
-        types.KeyboardButton("🗑 Очистить API VK")
+        "🚀 Спам в группы", "🚀 Спам в беседы",
+        "⏳ Установить задержку", "🕒 Время удаления",
+        "ℹ️ Статус", "➕ Добавить чат",
+        "✍️ Шаблон для спама", "🔑 Сменить токен VK",
+        "🗑 Удалить чат", "🗑 Очистить API VK"
     )
     return markup
 
-# Функция для создания клавиатуры удаления чата
+# Клавиатура удаления чатов
 def create_remove_chat_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=1)
     if VK_Groups or VK_CONVERSATIONS:
-        # Добавляем группы
         for group_id in VK_Groups:
             markup.add(types.InlineKeyboardButton(f"Группа {group_id}", callback_data=f"remove_group_{group_id}"))
-        # Добавляем беседы
         for conv_id in VK_CONVERSATIONS:
             markup.add(types.InlineKeyboardButton(f"Беседа {conv_id}", callback_data=f"remove_conversation_{conv_id}"))
         markup.add(types.InlineKeyboardButton("Отмена", callback_data="cancel_remove"))
@@ -99,6 +85,8 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
     global DELAY_TIME, DELETE_TIME, SPAM_TEMPLATE
     while SPAM_RUNNING['groups'] if chat_id < 0 else SPAM_RUNNING['conversations']:
         try:
+            if not vk:
+                raise Exception("VK API не инициализирован")
             msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
             logger.info(f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
             bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
@@ -106,79 +94,72 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
             vk.messages.delete(message_ids=[msg1], delete_for_all=1)
             logger.info(f"Удалено сообщение в VK чат {chat_id}")
             bot.send_message(telegram_chat_id, f"Удалено сообщение в VK чат {chat_id}")
-            time.sleep(DELAY_TIME - DELETE_TIME if DELAY_TIME > DELETE_TIME else 0)
+            time.sleep(max(0, DELAY_TIME - DELETE_TIME))
         except Exception as e:
             logger.error(f"Ошибка в чате {chat_id}: {str(e)}")
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)}")
             break
 
-# Функция пингования
+# Пингование
 def ping_service():
     global bot_started
-    PING_URL = "https://httpbin.org/status/200"  # URL для пинга, возвращающий код 200
-    PING_INTERVAL = 300  # Интервал пинга в секундах (5 минут)
-
+    PING_URL = "https://httpbin.org/status/200"
+    PING_INTERVAL = 300
     while bot_started:
         try:
             response = requests.get(PING_URL, timeout=10)
-            if response.status_code == 200:
-                logger.info("Пинг успешен (статус 200)")
-            else:
-                logger.warning(f"Пинг вернул статус {response.status_code}")
+            logger.info(f"Пинг: статус {response.status_code}")
         except Exception as e:
             logger.error(f"Ошибка пинга: {str(e)}")
         time.sleep(PING_INTERVAL)
 
-# Приветственное сообщение
+# Обработчики
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     logger.info(f"Пользователь {message.chat.id} запустил бота")
     bot.send_message(message.chat.id, "Привет! Я бот для спама в VK.", reply_markup=main_menu())
 
-# Спам в группы
 @bot.message_handler(func=lambda message: message.text == "🚀 Спам в группы")
 def start_spam_groups(message):
     global SPAM_RUNNING, SPAM_THREADS
     if not VK_Groups:
-        logger.warning("Список групп пуст!")
         bot.send_message(message.chat.id, "Список групп пуст!", reply_markup=main_menu())
+        return
+    if not vk:
+        bot.send_message(message.chat.id, "VK токен не установлен!", reply_markup=main_menu())
         return
     SPAM_RUNNING['groups'] = True
     SPAM_THREADS['groups'] = []
-    for chat_id in VK_Groups:
+    for chat_id in VK_Groups[:]:  # Копия списка
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
         thread.start()
         SPAM_THREADS['groups'].append(thread)
-    logger.info("Спам запущен в группах VK!")
     bot.send_message(message.chat.id, "Спам запущен в группах VK!", reply_markup=spam_menu('groups'))
 
-# Спам в беседы
 @bot.message_handler(func=lambda message: message.text == "🚀 Спам в беседы")
 def start_spam_conversations(message):
     global SPAM_RUNNING, SPAM_THREADS
     if not VK_CONVERSATIONS:
-        logger.warning("Список бесед пуст!")
         bot.send_message(message.chat.id, "Список бесед пуст!", reply_markup=main_menu())
+        return
+    if not vk:
+        bot.send_message(message.chat.id, "VK токен не установлен!", reply_markup=main_menu())
         return
     SPAM_RUNNING['conversations'] = True
     SPAM_THREADS['conversations'] = []
-    for chat_id in VK_CONVERSATIONS:
+    for chat_id in VK_CONVERSATIONS[:]:  # Копия списка
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
         thread.start()
         SPAM_THREADS['conversations'].append(thread)
-    logger.info("Спам запущен в беседах VK!")
     bot.send_message(message.chat.id, "Спам запущен в беседах VK!", reply_markup=spam_menu('conversations'))
 
-# Отключение спама
 @bot.message_handler(func=lambda message: message.text == "⛔ Отключить спам")
 def stop_spam(message):
     global SPAM_RUNNING
     SPAM_RUNNING['groups'] = False
     SPAM_RUNNING['conversations'] = False
-    logger.info("Спам остановлен!")
     bot.send_message(message.chat.id, "Спам остановлен!", reply_markup=main_menu())
 
-# Установить задержку
 @bot.message_handler(func=lambda message: message.text == "⏳ Установить задержку")
 def set_delay_prompt(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
@@ -188,271 +169,200 @@ def set_delay_prompt(message):
         types.InlineKeyboardButton("1 мин", callback_data="delay_60"),
         types.InlineKeyboardButton("5 мин", callback_data="delay_300")
     )
-    logger.info(f"Пользователь {message.chat.id} запросил установку задержки")
     bot.send_message(message.chat.id, "Выбери время между действиями:", reply_markup=markup)
 
-# Установить время удаления
 @bot.message_handler(func=lambda message: message.text == "🕒 Время удаления")
 def set_delete_time_prompt(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("15 сек", callback_data="delete_15"),
         types.InlineKeyboardButton("30 сек", callback_data="delete_30"),
-        types.InlineKeyboardButton("1 мин", callback_data="delay_60"),
+        types.InlineKeyboardButton("1 мин", callback_data="delete_60"),
         types.InlineKeyboardButton("5 мин", callback_data="delete_300")
     )
-    logger.info(f"Пользователь {message.chat.id} запросил установку времени удаления")
     bot.send_message(message.chat.id, "Выбери время до удаления:", reply_markup=markup)
 
-# Обработка задержки
 @bot.callback_query_handler(func=lambda call: call.data.startswith("delay_"))
 def set_delay_callback(call):
     global DELAY_TIME
     DELAY_TIME = int(call.data.split("_")[1])
-    logger.info(f"Задержка установлена на {DELAY_TIME} секунд пользователем {call.message.chat.id}")
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                          text=f"Задержка между действиями: {DELAY_TIME} секунд", reply_markup=None)
+                         text=f"Задержка между действиями: {DELAY_TIME} секунд", reply_markup=None)
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Обработка времени удаления
 @bot.callback_query_handler(func=lambda call: call.data.startswith("delete_"))
 def set_delete_time_callback(call):
     global DELETE_TIME
     DELETE_TIME = int(call.data.split("_")[1])
-    logger.info(f"Время удаления установлено на {DELETE_TIME} секунд пользователем {call.message.chat.id}")
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                          text=f"Время до удаления: {DELETE_TIME} секунд", reply_markup=None)
+                         text=f"Время до удаления: {DELETE_TIME} секунд", reply_markup=None)
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Статус
 @bot.message_handler(func=lambda message: message.text == "ℹ️ Статус")
 def status(message):
     groups_str = ", ".join(map(str, VK_Groups)) if VK_Groups else "Пусто"
     convs_str = ", ".join(map(str, VK_CONVERSATIONS)) if VK_CONVERSATIONS else "Пусто"
     status_msg = f"Задержка: {DELAY_TIME} сек\nВремя удаления: {DELETE_TIME} сек\nШаблон: '{SPAM_TEMPLATE}'\nГруппы: {groups_str}\nБеседы: {convs_str}"
-    logger.info(f"Пользователь {message.chat.id} запросил статус: {status_msg}")
     bot.send_message(message.chat.id, status_msg, reply_markup=main_menu())
 
-# Добавить чат
 @bot.message_handler(func=lambda message: message.text == "➕ Добавить чат")
 def add_chat_prompt(message):
-    logger.info(f"Пользователь {message.chat.id} запросил добавление чата")
     bot.send_message(message.chat.id, "Введи ID чата VK (- для группы, 2000000000+ для беседы):")
     bot.register_next_step_handler(message, add_chat)
 
 def add_chat(message):
     try:
         chat_id = int(message.text)
-        if chat_id < 0:
-            if chat_id not in VK_Groups:
-                VK_Groups.append(chat_id)
-                logger.info(f"Группа {chat_id} добавлена пользователем {message.chat.id}")
-                bot.send_message(message.chat.id, f"Группа {chat_id} добавлена!", reply_markup=main_menu())
-            else:
-                logger.warning(f"Группа {chat_id} уже в списке для пользователя {message.chat.id}")
-                bot.send_message(message.chat.id, "Группа уже в списке!", reply_markup=main_menu())
-        elif chat_id >= 2000000000:
-            if chat_id not in VK_CONVERSATIONS:
-                VK_CONVERSATIONS.append(chat_id)
-                logger.info(f"Беседа {chat_id} добавлена пользователем {message.chat.id}")
-                bot.send_message(message.chat.id, f"Беседа {chat_id} добавлена!", reply_markup=main_menu())
-            else:
-                logger.warning(f"Беседа {chat_id} уже в списке для пользователя {message.chat.id}")
-                bot.send_message(message.chat.id, "Беседа уже в списке!", reply_markup=main_menu())
+        if chat_id < 0 and chat_id not in VK_Groups:
+            VK_Groups.append(chat_id)
+            bot.send_message(message.chat.id, f"Группа {chat_id} добавлена!", reply_markup=main_menu())
+        elif chat_id >= 2000000000 and chat_id not in VK_CONVERSATIONS:
+            VK_CONVERSATIONS.append(chat_id)
+            bot.send_message(message.chat.id, f"Беседа {chat_id} добавлена!", reply_markup=main_menu())
         else:
-            logger.error(f"Неверный ID чата от пользователя {message.chat.id}")
-            bot.send_message(message.chat.id, "Неверный ID!", reply_markup=main_menu())
+            bot.send_message(message.chat.id, "Чат уже в списке или неверный ID!", reply_markup=main_menu())
     except ValueError:
-        logger.error(f"Некорректный ввод ID от пользователя {message.chat.id}")
-        bot.send_message(message.chat.id, "ID — число!", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "ID должен быть числом!", reply_markup=main_menu())
 
-# Удалить чат
 @bot.message_handler(func=lambda message: message.text == "🗑 Удалить чат")
 def remove_chat_prompt(message):
-    logger.info(f"Пользователь {message.chat.id} запросил удаление чата")
     markup = create_remove_chat_keyboard()
     bot.send_message(message.chat.id, "Выберите чат для удаления:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("remove_") or call.data in ["cancel_remove", "no_chats"])
 def handle_remove_chat(call):
-    logger.info(f"Обработка callback-запроса: {call.data}")
+    global VK_Groups, VK_CONVERSATIONS
     if call.data == "no_chats":
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                              text="Нет чатов для удаления.", reply_markup=main_menu())
+                            text="Нет чатов для удаления.", reply_markup=None)
     elif call.data == "cancel_remove":
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                              text="Удаление чата отменено.", reply_markup=main_menu())
+                            text="Удаление отменено.", reply_markup=None)
     elif call.data.startswith("remove_group_"):
         group_id = int(call.data.split("_")[2])
-        logger.debug(f"Попытка удалить группу {group_id}")
         if group_id in VK_Groups:
-            VK_Groups.remove(group_id)
-            logger.info(f"Группа {group_id} удалена пользователем {call.message.chat.id}")
+            VK_Groups = [x for x in VK_Groups if x != group_id]  # Обновляем список
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=f"Группа {group_id} удалена из списка.", reply_markup=main_menu())
+                                text=f"Группа {group_id} удалена.", reply_markup=None)
         else:
-            logger.warning(f"Группа {group_id} не найдена в списке для пользователя {call.message.chat.id}")
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=f"Группа {group_id} не найдена в списке.", reply_markup=main_menu())
+                                text=f"Группа {group_id} не найдена.", reply_markup=None)
     elif call.data.startswith("remove_conversation_"):
         conv_id = int(call.data.split("_")[2])
-        logger.debug(f"Попытка удалить беседу {conv_id}")
         if conv_id in VK_CONVERSATIONS:
-            VK_CONVERSATIONS.remove(conv_id)
-            logger.info(f"Беседа {conv_id} удалена пользователем {call.message.chat.id}")
+            VK_CONVERSATIONS = [x for x in VK_CONVERSATIONS if x != conv_id]  # Обновляем список
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=f"Беседа {conv_id} удалена из списка.", reply_markup=main_menu())
+                                text=f"Беседа {conv_id} удалена.", reply_markup=None)
         else:
-            logger.warning(f"Беседа {conv_id} не найдена в списке для пользователя {call.message.chat.id}")
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                                  text=f"Беседа {conv_id} не найдена в списке.", reply_markup=main_menu())
+                                text=f"Беседа {conv_id} не найдена.", reply_markup=None)
     bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Шаблон для спама
 @bot.message_handler(func=lambda message: message.text == "✍️ Шаблон для спама")
 def edit_template_prompt(message):
-    logger.info(f"Пользователь {message.chat.id} запросил изменение шаблона")
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("Изменить шаблон", callback_data="edit_template"))
     bot.send_message(message.chat.id, f"Текущий шаблон: '{SPAM_TEMPLATE}'", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "edit_template")
 def edit_template_callback(call):
-    logger.info(f"Пользователь {call.message.chat.id} начал редактирование шаблона")
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                          text="Введи новый текст для спама:", reply_markup=None)
+                         text="Введи новый текст для спама:", reply_markup=None)
     bot.register_next_step_handler_by_chat_id(call.message.chat.id, update_template)
 
 def update_template(message):
     global SPAM_TEMPLATE
     SPAM_TEMPLATE = message.text
-    logger.info(f"Шаблон обновлён пользователем {message.chat.id} на: '{SPAM_TEMPLATE}'")
     bot.send_message(message.chat.id, f"Шаблон обновлён: '{SPAM_TEMPLATE}'", reply_markup=main_menu())
 
-# Смена токена VK
 @bot.message_handler(func=lambda message: message.text == "🔑 Сменить токен VK")
 def change_vk_token_prompt(message):
-    logger.info(f"Пользователь {message.chat.id} запросил смену токена VK")
     bot.send_message(message.chat.id, "Введи новый токен VK API:")
     bot.register_next_step_handler(message, update_vk_token)
 
 def update_vk_token(message):
     global VK_TOKEN, vk_session, vk
-    new_token = message.text.strip()
-    VK_TOKEN = new_token
+    VK_TOKEN = message.text.strip()
     try:
         vk_session = vk_api.VkApi(token=VK_TOKEN)
         vk = vk_session.get_api()
-        vk.account.getInfo()  # Проверка токена
-        logger.info(f"Токен VK успешно обновлён пользователем {message.chat.id}")
-        bot.send_message(message.chat.id, "Токен VK успешно обновлён!", reply_markup=main_menu())
+        vk.account.getInfo()
+        bot.send_message(message.chat.id, "Токен VK обновлён!", reply_markup=main_menu())
     except Exception as e:
-        logger.error(f"Ошибка обновления токена для пользователя {message.chat.id}: {str(e)}")
         bot.send_message(message.chat.id, f"Ошибка: {str(e)}. Токен недействителен!", reply_markup=main_menu())
 
-# Очистка API VK с подтверждением
 @bot.message_handler(func=lambda message: message.text == "🗑 Очистить API VK")
 def clear_vk_api_prompt(message):
-    logger.info(f"Пользователь {message.chat.id} запросил очистку API VK")
     markup = types.InlineKeyboardMarkup()
     markup.add(
         types.InlineKeyboardButton("Да, очистить", callback_data="confirm_clear"),
         types.InlineKeyboardButton("Отмена", callback_data="cancel_clear")
     )
-    bot.send_message(message.chat.id, "Вы уверены, что хотите полностью очистить API VK и настройки?", reply_markup=markup)
+    bot.send_message(message.chat.id, "Очистить API VK и настройки?", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data in ["confirm_clear", "cancel_clear"])
 def handle_clear_confirmation(call):
+    global VK_TOKEN, vk_session, vk, VK_Groups, VK_CONVERSATIONS, DELAY_TIME, DELETE_TIME, SPAM_TEMPLATE, SPAM_RUNNING, SPAM_THREADS
     if call.data == "confirm_clear":
-        global VK_TOKEN, vk_session, vk, VK_Groups, VK_CONVERSATIONS, DELAY_TIME, DELETE_TIME, SPAM_TEMPLATE, SPAM_RUNNING, SPAM_THREADS
-        
-        # Остановка всех активных спам-потоков
-        SPAM_RUNNING['groups'] = False
-        SPAM_RUNNING['conversations'] = False
+        SPAM_RUNNING['groups'] = SPAM_RUNNING['conversations'] = False
         for threads in SPAM_THREADS.values():
-            for thread in threads:
-                if thread and thread.is_alive():
-                    thread.join()  # Дождаться завершения потоков
+            for thread in threads[:]:
+                if thread.is_alive():
+                    thread.join()
         SPAM_THREADS = {'groups': [], 'conversations': []}
-
-        # Сброс токена и данных VK
         VK_TOKEN = ''
         vk_session = None
         vk = None
         VK_Groups = []
         VK_CONVERSATIONS = []
-
-        # Возвращаем настройки по умолчанию
         DELAY_TIME = 15
         DELETE_TIME = 15
         SPAM_TEMPLATE = "Первое сообщение"
-
-        logger.info(f"API VK и настройки очищены пользователем {call.message.chat.id}")
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                              text="API VK и все настройки успешно очищены! Требуется новый токен VK для работы.", reply_markup=main_menu())
+                            text="API VK очищен! Нужен новый токен.", reply_markup=None)
     else:
-        logger.info(f"Очистка API VK отменена пользователем {call.message.chat.id}")
         bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id,
-                              text="Очистка отменена.", reply_markup=main_menu())
+                            text="Очистка отменена.", reply_markup=None)
     bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Функция для безопасного поллинга с обработкой ошибок 409
+# Поллинг с обработкой ошибок
 def start_safe_polling():
     global bot_started
-    retry_delay = 5  # Задержка перед повторной попыткой (секунды)
-    max_retries = 5  # Максимальное количество попыток
-
+    bot_started = True
     while bot_started:
         try:
-            logger.info("Запуск безопасного поллинга Telegram...")
-            bot.polling(none_stop=True)  # Убрано allowed_updates=types.AllowedUpdates()
-            break  # Если polling завершился без ошибок, выходим из цикла
+            bot.remove_webhook()  # Удаляем вебхук если есть
+            bot.polling(none_stop=True, interval=0, timeout=20)
         except apihelper.ApiTelegramException as e:
-            if e.error_code == 409:  # Конфликт getUpdates
-                logger.error(f"Ошибка 409: Конфликт с другим экземпляром бота. Ожидание {retry_delay} секунд перед повторной попыткой.")
-                if max_retries > 0:
-                    max_retries -= 1
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    logger.error("Превышено максимальное количество попыток восстановления после ошибки 409. Завершение работы бота.")
-                    bot_started = False
-                    break
+            if e.error_code == 409:
+                logger.error("Конфликт 409: другой экземпляр бота работает")
+                time.sleep(5)
+                bot.remove_webhook()
+                continue
             else:
-                logger.error(f"Необработанная ошибка Telegram API: {str(e)}")
-                bot_started = False
+                logger.error(f"Ошибка Telegram API: {str(e)}")
                 break
         except Exception as e:
-            logger.error(f"Неизвестная ошибка при поллинге: {str(e)}")
-            bot_started = False
+            logger.error(f"Неизвестная ошибка: {str(e)}")
             break
 
-# Обработка сигналов для graceful shutdown
+# Обработка сигналов
 def signal_handler(sig, frame):
     global bot_started
-    logger.info('Получен сигнал для завершения...')
-    bot_started = False  # Останавливаем пингование и поллинг
+    logger.info('Завершение работы...')
+    bot_started = False
     bot.stop_polling()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# Запуск бота с пингованием и безопасным поллингом
 if __name__ == "__main__":
     logger.info("Бот запущен")
-    bot_started = True  # Устанавливаем флаг, что бот запущен
-
-    # Запуск пингования в отдельном потоке
     ping_thread = threading.Thread(target=ping_service, daemon=True)
     ping_thread.start()
-
-    # Запуск безопасного поллинга
-    try:
-        start_safe_polling()
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {str(e)}")
-        bot_started = False  # Останавливаем пингование при ошибке
-        sys.exit(1)
+    start_safe_polling()
