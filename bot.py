@@ -37,7 +37,7 @@ SPAM_RUNNING = {'groups': False, 'conversations': False}  # Флаги спам�
 SPAM_THREADS = {'groups': [], 'conversations': []}  # Потоки спама
 SPAM_TEMPLATE = "Первое сообщение"  # Шаблон по умолчанию
 
-# Флаг для отслеживания, запущен ли бот
+# Глобальная переменная для отслеживания статуса бота
 bot_started = False
 
 # Основная клавиатура
@@ -164,7 +164,7 @@ def set_delay_prompt(message):
     markup.add(
         types.InlineKeyboardButton("15 сек", callback_data="delay_15"),
         types.InlineKeyboardButton("30 сек", callback_data="delay_30"),
-       types.InlineKeyboardButton("1 мин", callback_data="delay_60"),
+        types.InlineKeyboardButton("1 мин", callback_data="delay_60"),
         types.InlineKeyboardButton("5 мин", callback_data="delay_300")
     )
     logger.info(f"Пользователь {message.chat.id} запросил установку задержки")
