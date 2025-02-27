@@ -16,11 +16,9 @@ except ImportError as e:
     print(f"Ошибка: отсутствует библиотека - {e}. Установите зависимости с помощью 'pip install -r requirements.txt'.")
     sys.exit(1)
 
-# Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Загрузка переменных окружения
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -29,6 +27,9 @@ if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен")
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
+if not VK_TOKEN:
+    logger.warning("VK_TOKEN не задан, спам не будет работать")
+
 RENDER_PUBLIC_DOMAIN = "spambot-jx8n.onrender.com"
 WEBHOOK_URL = f"https://{RENDER_PUBLIC_DOMAIN}"
 WEBHOOK_PATH = '/webhook'
@@ -100,8 +101,10 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
                 time.sleep(DELETE_TIME)
                 vk.messages.delete(message_ids=[msg1], delete_for_all=1)
                 bot.send_message(telegram_chat_id, f"Удалено сообщение из чата группы VK {chat_id}")
+                
                 group_id = abs(chat_id)
-                post = vk.wall.post(owner_id=f"-{group_id}", message=SPAM_TEMPLATE)
+                logger.debug(f"Публикация на стену группы {chat_id} с owner_id=-{group_id}")
+                post = vk.wall.post(owner_id=f"-{group_id}", message=SPAM_TEMPLATE, from_group=1)
                 post_id = post['post_id']
                 bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' на стену группы VK {chat_id}")
                 time.sleep(DELETE_TIME)
@@ -134,7 +137,6 @@ def ping_service():
             logger.debug(f"Пинг: статус {response.status_code}")
             if response.status_code != 200:
                 logger.warning("Пинг вернул не 200, возможна проблема с сервером")
-            # Проверка и переустановка вебхука
             webhook_info = bot.get_webhook_info()
             if webhook_info.url != WEBHOOK_FULL_URL:
                 logger.warning(f"Вебхук сбился: {webhook_info.url}. Переустанавливаю...")
@@ -160,11 +162,13 @@ def start_spam_groups(message):
         return
     SPAM_RUNNING['groups'] = True
     SPAM_THREADS['groups'] = []
+    logger.info(f"Запуск спама в группы для {message.chat.id}")
     for chat_id in VK_Groups[:]:
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
         thread.daemon = True
         thread.start()
         SPAM_THREADS['groups'].append(thread)
+        logger.debug(f"Поток запущен для группы {chat_id}")
     bot.send_message(message.chat.id, "Спам запущен в группах VK!", reply_markup=spam_menu('groups'))
 
 @bot.message_handler(func=lambda message: message.text == "🚀 Спам в беседы")
@@ -178,24 +182,31 @@ def start_spam_conversations(message):
         return
     SPAM_RUNNING['conversations'] = True
     SPAM_THREADS['conversations'] = []
+    logger.info(f"Запуск спама в беседы для {message.chat.id}")
     for chat_id in VK_CONVERSATIONS[:]:
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
         thread.daemon = True
         thread.start()
         SPAM_THREADS['conversations'].append(thread)
+        logger.debug(f"Поток запущен для беседы {chat_id}")
     bot.send_message(message.chat.id, "Спам запущен в беседах VK!", reply_markup=spam_menu('conversations'))
 
 @bot.message_handler(func=lambda message: message.text == "⛔ Отключить спам")
 def stop_spam(message):
     global SPAM_RUNNING, SPAM_THREADS
+    logger.info(f"Получена команда остановки спама от {message.chat.id}")
     SPAM_RUNNING['groups'] = False
     SPAM_RUNNING['conversations'] = False
     for thread_type in SPAM_THREADS:
         for thread in SPAM_THREADS[thread_type][:]:
             if thread.is_alive():
+                logger.debug(f"Ожидание завершения потока для {thread_type}")
                 thread.join(timeout=5)
+                if thread.is_alive():
+                    logger.warning(f"Поток для {thread_type} не завершился вовремя")
     SPAM_THREADS = {'groups': [], 'conversations': []}
     bot.send_message(message.chat.id, "Спам остановлен!", reply_markup=main_menu())
+    logger.info("Спам успешно остановлен")
 
 @bot.message_handler(func=lambda message: message.text == "⏳ Установить задержку")
 def set_delay_prompt(message):
@@ -414,7 +425,6 @@ def setup_webhook():
             time.sleep(2 * retries)
     logger.error("Не удалось установить webhook после всех попыток")
     try:
-        import requests
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={WEBHOOK_FULL_URL}"
         response = requests.get(url, timeout=10)
         logger.info(f"Принудительная установка вебхука: {response.json()}")
