@@ -376,30 +376,32 @@ def handle_clear_confirmation(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Вебхук обработчик
+# Вебхук обработчик с дополнительной отладкой
 @app.route(WEBHOOK_PATH, methods=['POST'])
 def webhook():
+    logger.debug(f"Получен запрос на вебхук: {request.headers}, данные: {request.data}")
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
-        update = types.Update.de_json(json_string)
         logger.debug(f"Получено обновление: {json_string}")
+        update = types.Update.de_json(json_string)
         bot.process_new_updates([update])
         return Response('OK', status=200)
     else:
+        logger.warning(f"Неверный тип контента: {request.headers.get('content-type')}")
         return Response('Invalid content type', status=403)
 
 @app.route('/')
 def index():
     return "Бот работает!"
 
-# Функция настройки вебхука
+# Функция настройки вебхука с принудительной установкой
 def setup_webhook():
     max_retries = 3
     retries = 0
     while retries < max_retries:
         try:
             logger.debug(f"Попытка установки вебхука: {WEBHOOK_FULL_URL}")
-            bot.remove_webhook()
+            bot.remove_webhook()  # Удаляем старый вебхук
             time.sleep(1)
             bot.set_webhook(url=WEBHOOK_FULL_URL)
             webhook_info = bot.get_webhook_info()
@@ -413,8 +415,18 @@ def setup_webhook():
             retries += 1
             logger.error(f"Ошибка установки webhook (попытка {retries}/{max_retries}): {str(e)}")
             time.sleep(2 * retries)
-    logger.error("Не удалось установить webhook")
-    return False
+    logger.error("Не удалось установить webhook после всех попыток")
+    # Принудительная установка через requests
+    try:
+        import requests
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={WEBHOOK_FULL_URL}"
+        response = requests.get(url, timeout=10)
+        logger.info(f"Принудительная установка вебхука: {response.json()}")
+        if response.json().get("ok"):
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка принудительной установки: {str(e)}")
+    sys.exit(1)
 
 # Обработка сигналов
 def signal_handler(sig, frame):
