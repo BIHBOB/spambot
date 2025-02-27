@@ -7,7 +7,6 @@ import logging
 import uuid
 import requests
 
-# Проверка наличия зависимостей
 try:
     from flask import Flask, request, Response
     from telebot import TeleBot, types
@@ -36,21 +35,15 @@ WEBHOOK_URL = f"https://{RENDER_PUBLIC_DOMAIN}"
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_FULL_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
-# Уникальный идентификатор экземпляра
 INSTANCE_ID = str(uuid.uuid4())
 logger.info(f"Запущен экземпляр бота с ID: {INSTANCE_ID}")
 
-# Инициализация Flask приложения
 app = Flask(__name__)
-
-# Инициализация бота Telegram
 bot = TeleBot(TELEGRAM_TOKEN, threaded=False)
 
-# Инициализация VK API
 vk_session = vk_api.VkApi(token=VK_TOKEN) if VK_TOKEN else None
 vk = vk_session.get_api() if vk_session else None
 
-# Глобальные переменные
 VK_Groups = [-211223344, -155667788, -199887766, -188445566, -177334455]
 VK_CONVERSATIONS = [2000000001, 2000000005]
 DELAY_TIME = 15
@@ -60,7 +53,6 @@ SPAM_THREADS = {'groups': [], 'conversations': []}
 SPAM_TEMPLATE = "Первое сообщение"
 bot_started = False
 
-# Основная клавиатура
 def main_menu():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add(
@@ -72,7 +64,6 @@ def main_menu():
     )
     return markup
 
-# Клавиатура спама
 def spam_menu(spam_type):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("⛔ Отключить спам")
@@ -85,7 +76,6 @@ def spam_menu(spam_type):
     )
     return markup
 
-# Клавиатура удаления чатов
 def create_remove_chat_keyboard():
     markup = types.InlineKeyboardMarkup(row_width=1)
     if VK_Groups or VK_CONVERSATIONS:
@@ -98,7 +88,6 @@ def create_remove_chat_keyboard():
         markup.add(types.InlineKeyboardButton("Нет чатов для удаления", callback_data="no_chats"))
     return markup
 
-# Функция спама
 def send_and_delete_vk_messages(chat_id, telegram_chat_id):
     global DELAY_TIME, DELETE_TIME, SPAM_TEMPLATE
     while SPAM_RUNNING['groups'] if chat_id < 0 else SPAM_RUNNING['conversations']:
@@ -106,31 +95,30 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
             if not vk:
                 raise Exception("VK API не инициализирован")
             
-            if chat_id < 0:  # Группа (отрицательный ID)
-                # 1. Отправка в чат группы
+            logger.debug(f"Начало отправки в чат {chat_id}")
+            if chat_id < 0:  # Группа
                 msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
                 bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в чат группы VK {chat_id}")
                 time.sleep(DELETE_TIME)
                 vk.messages.delete(message_ids=[msg1], delete_for_all=1)
                 bot.send_message(telegram_chat_id, f"Удалено сообщение из чата группы VK {chat_id}")
                 
-                # 2. Публикация на стену группы
-                group_id = abs(chat_id)  # Убираем минус для owner_id
+                group_id = abs(chat_id)
                 post = vk.wall.post(owner_id=f"-{group_id}", message=SPAM_TEMPLATE)
                 post_id = post['post_id']
                 bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' на стену группы VK {chat_id}")
                 time.sleep(DELETE_TIME)
                 vk.wall.delete(owner_id=f"-{group_id}", post_id=post_id)
                 bot.send_message(telegram_chat_id, f"Удалена запись со стены группы VK {chat_id}")
-            else:  # Беседа (положительный ID)
-                # Отправка сообщения в чат
+            else:  # Беседа
                 msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
                 bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
                 time.sleep(DELETE_TIME)
                 vk.messages.delete(message_ids=[msg1], delete_for_all=1)
                 bot.send_message(telegram_chat_id, f"Удалено сообщение в VK чат {chat_id}")
             
-            time.sleep(max(0, DELAY_TIME - DELETE_TIME * 2))  # Учитываем двойное время DELETE_TIME для групп
+            time.sleep(max(0, DELAY_TIME - DELETE_TIME * 2))
+            logger.debug(f"Цикл спама для {chat_id} завершён")
         except vk_api.exceptions.ApiError as e:
             logger.error(f"Ошибка VK API в чате {chat_id}: {str(e)}")
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)} (код: {e.code})")
@@ -140,20 +128,20 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)}")
             break
 
-# Самопингование для антизасыпания
 def ping_service():
     global bot_started
     PING_URL = os.getenv('PING_URL', f"https://{RENDER_PUBLIC_DOMAIN}")
-    PING_INTERVAL = 900  # 15 минут
+    PING_INTERVAL = 300  # Уменьшено до 5 минут
     while bot_started:
         try:
-            response = requests.head(PING_URL, timeout=5)
+            response = requests.head(PING_URL, timeout=10)
             logger.debug(f"Пинг: статус {response.status_code}")
+            if response.status_code != 200:
+                logger.warning("Пинг вернул не 200, возможна проблема с сервером")
         except Exception as e:
             logger.error(f"Ошибка пинга: {str(e)}")
         time.sleep(PING_INTERVAL)
 
-# Обработчики сообщений
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     logger.info(f"Пользователь {message.chat.id} запустил бота")
@@ -376,7 +364,6 @@ def handle_clear_confirmation(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id, "Выбери действие:", reply_markup=main_menu())
 
-# Вебхук обработчик с дополнительной отладкой
 @app.route(WEBHOOK_PATH, methods=['POST'])
 def webhook():
     logger.debug(f"Получен запрос на вебхук: {request.headers}, данные: {request.data}")
@@ -394,14 +381,13 @@ def webhook():
 def index():
     return "Бот работает!"
 
-# Функция настройки вебхука с принудительной установкой
 def setup_webhook():
     max_retries = 3
     retries = 0
     while retries < max_retries:
         try:
             logger.debug(f"Попытка установки вебхука: {WEBHOOK_FULL_URL}")
-            bot.remove_webhook()  # Удаляем старый вебхук
+            bot.remove_webhook()
             time.sleep(1)
             bot.set_webhook(url=WEBHOOK_FULL_URL)
             webhook_info = bot.get_webhook_info()
@@ -416,7 +402,6 @@ def setup_webhook():
             logger.error(f"Ошибка установки webhook (попытка {retries}/{max_retries}): {str(e)}")
             time.sleep(2 * retries)
     logger.error("Не удалось установить webhook после всех попыток")
-    # Принудительная установка через requests
     try:
         import requests
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/setWebhook?url={WEBHOOK_FULL_URL}"
@@ -428,7 +413,6 @@ def setup_webhook():
         logger.error(f"Ошибка принудительной установки: {str(e)}")
     sys.exit(1)
 
-# Обработка сигналов
 def signal_handler(sig, frame):
     global bot_started
     logger.info(f"Завершение экземпляра {INSTANCE_ID}")
@@ -439,20 +423,16 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# Запуск бота
 if __name__ == "__main__":
     logger.info(f"Запуск бота, экземпляр: {INSTANCE_ID}")
     bot_started = True
 
-    # Установка вебхука
     if not setup_webhook():
         logger.error("Не удалось настроить вебхук. Завершение.")
         sys.exit(1)
 
-    # Запуск пингования в отдельном потоке
     ping_thread = threading.Thread(target=ping_service, daemon=True)
     ping_thread.start()
 
-    # Настройка для Render
     port = int(os.getenv('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
