@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Токены и конфигурация
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     logger.error("TELEGRAM_TOKEN не задан или содержит пробелы")
@@ -94,15 +93,13 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
         try:
             if not vk:
                 raise Exception("VK API не инициализирован")
-            
             logger.debug(f"Начало отправки в чат {chat_id}")
-            if chat_id < 0:  # Группа
+            if chat_id < 0:
                 msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
                 bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в чат группы VK {chat_id}")
                 time.sleep(DELETE_TIME)
                 vk.messages.delete(message_ids=[msg1], delete_for_all=1)
                 bot.send_message(telegram_chat_id, f"Удалено сообщение из чата группы VK {chat_id}")
-                
                 group_id = abs(chat_id)
                 post = vk.wall.post(owner_id=f"-{group_id}", message=SPAM_TEMPLATE)
                 post_id = post['post_id']
@@ -110,13 +107,12 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
                 time.sleep(DELETE_TIME)
                 vk.wall.delete(owner_id=f"-{group_id}", post_id=post_id)
                 bot.send_message(telegram_chat_id, f"Удалена запись со стены группы VK {chat_id}")
-            else:  # Беседа
+            else:
                 msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
                 bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
                 time.sleep(DELETE_TIME)
                 vk.messages.delete(message_ids=[msg1], delete_for_all=1)
                 bot.send_message(telegram_chat_id, f"Удалено сообщение в VK чат {chat_id}")
-            
             time.sleep(max(0, DELAY_TIME - DELETE_TIME * 2))
             logger.debug(f"Цикл спама для {chat_id} завершён")
         except vk_api.exceptions.ApiError as e:
@@ -131,15 +127,21 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
 def ping_service():
     global bot_started
     PING_URL = os.getenv('PING_URL', f"https://{RENDER_PUBLIC_DOMAIN}")
-    PING_INTERVAL = 300  # Уменьшено до 5 минут
+    PING_INTERVAL = 300
     while bot_started:
         try:
             response = requests.head(PING_URL, timeout=10)
             logger.debug(f"Пинг: статус {response.status_code}")
             if response.status_code != 200:
                 logger.warning("Пинг вернул не 200, возможна проблема с сервером")
+            # Проверка и переустановка вебхука
+            webhook_info = bot.get_webhook_info()
+            if webhook_info.url != WEBHOOK_FULL_URL:
+                logger.warning(f"Вебхук сбился: {webhook_info.url}. Переустанавливаю...")
+                bot.set_webhook(url=WEBHOOK_FULL_URL)
+                logger.info("Вебхук переустановлен")
         except Exception as e:
-            logger.error(f"Ошибка пинга: {str(e)}")
+            logger.error(f"Ошибка пинга или проверки вебхука: {str(e)}")
         time.sleep(PING_INTERVAL)
 
 @bot.message_handler(commands=['start'])
@@ -244,10 +246,12 @@ def status(message):
 
 @bot.message_handler(func=lambda message: message.text == "➕ Добавить чат")
 def add_chat_prompt(message):
+    logger.debug(f"Запрос на добавление чата от {message.chat.id}")
     bot.send_message(message.chat.id, "Введи ID чата VK (- для группы, 2000000000+ для беседы):")
     bot.register_next_step_handler(message, add_chat)
 
 def add_chat(message):
+    logger.debug(f"Обработка ввода ID чата от {message.chat.id}: {message.text}")
     try:
         chat_id = int(message.text)
         if chat_id < 0 and chat_id not in VK_Groups:
@@ -259,7 +263,11 @@ def add_chat(message):
         else:
             bot.send_message(message.chat.id, "Чат уже в списке или неверный ID!", reply_markup=main_menu())
     except ValueError:
+        logger.warning(f"Неверный формат ID от {message.chat.id}: {message.text}")
         bot.send_message(message.chat.id, "ID должен быть числом!", reply_markup=main_menu())
+    except Exception as e:
+        logger.error(f"Ошибка в add_chat для {message.chat.id}: {str(e)}")
+        bot.send_message(message.chat.id, f"Произошла ошибка: {str(e)}", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda message: message.text == "🗑 Удалить чат")
 def remove_chat_prompt(message):
@@ -371,7 +379,10 @@ def webhook():
         json_string = request.get_data().decode('utf-8')
         logger.debug(f"Получено обновление: {json_string}")
         update = types.Update.de_json(json_string)
-        bot.process_new_updates([update])
+        if update:
+            bot.process_new_updates([update])
+        else:
+            logger.warning("Получено пустое обновление")
         return Response('OK', status=200)
     else:
         logger.warning(f"Неверный тип контента: {request.headers.get('content-type')}")
