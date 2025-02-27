@@ -18,7 +18,7 @@ except ImportError as e:
     sys.exit(1)
 
 # Настройка логирования
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')  # Установлен DEBUG для диагностики
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения
@@ -31,7 +31,7 @@ if not TELEGRAM_TOKEN or any(char.isspace() for char in TELEGRAM_TOKEN):
     raise ValueError("TELEGRAM_TOKEN отсутствует или некорректен")
 
 VK_TOKEN = os.getenv('VK_TOKEN', '')
-RENDER_PUBLIC_DOMAIN = "spambot-jx8n.onrender.com"  # Указан конкретный домен Render
+RENDER_PUBLIC_DOMAIN = "spambot-jx8n.onrender.com"
 WEBHOOK_URL = f"https://{RENDER_PUBLIC_DOMAIN}"
 WEBHOOK_PATH = '/webhook'
 WEBHOOK_FULL_URL = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
@@ -105,14 +105,38 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
         try:
             if not vk:
                 raise Exception("VK API не инициализирован")
-            msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
-            bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
-            time.sleep(DELETE_TIME)
-            vk.messages.delete(message_ids=[msg1], delete_for_all=1)
-            bot.send_message(telegram_chat_id, f"Удалено сообщение в VK чат {chat_id}")
-            time.sleep(max(0, DELAY_TIME - DELETE_TIME))
+            
+            if chat_id < 0:  # Группа (отрицательный ID)
+                # 1. Отправка в чат группы
+                msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
+                bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в чат группы VK {chat_id}")
+                time.sleep(DELETE_TIME)
+                vk.messages.delete(message_ids=[msg1], delete_for_all=1)
+                bot.send_message(telegram_chat_id, f"Удалено сообщение из чата группы VK {chat_id}")
+                
+                # 2. Публикация на стену группы
+                group_id = abs(chat_id)  # Убираем минус для owner_id
+                post = vk.wall.post(owner_id=f"-{group_id}", message=SPAM_TEMPLATE)
+                post_id = post['post_id']
+                bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' на стену группы VK {chat_id}")
+                time.sleep(DELETE_TIME)
+                vk.wall.delete(owner_id=f"-{group_id}", post_id=post_id)
+                bot.send_message(telegram_chat_id, f"Удалена запись со стены группы VK {chat_id}")
+            else:  # Беседа (положительный ID)
+                # Отправка сообщения в чат
+                msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
+                bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в VK чат {chat_id}")
+                time.sleep(DELETE_TIME)
+                vk.messages.delete(message_ids=[msg1], delete_for_all=1)
+                bot.send_message(telegram_chat_id, f"Удалено сообщение в VK чат {chat_id}")
+            
+            time.sleep(max(0, DELAY_TIME - DELETE_TIME * 2))  # Учитываем двойное время DELETE_TIME для групп
+        except vk_api.exceptions.ApiError as e:
+            logger.error(f"Ошибка VK API в чате {chat_id}: {str(e)}")
+            bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)} (код: {e.code})")
+            break
         except Exception as e:
-            logger.error(f"Ошибка в чате {chat_id}: {str(e)}")
+            logger.error(f"Общая ошибка в чате {chat_id}: {str(e)}")
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)}")
             break
 
@@ -123,7 +147,7 @@ def ping_service():
     PING_INTERVAL = 900  # 15 минут
     while bot_started:
         try:
-            response = requests.head(PING_URL, timeout=5)  # Используем HEAD для экономии трафика
+            response = requests.head(PING_URL, timeout=5)
             logger.debug(f"Пинг: статус {response.status_code}")
         except Exception as e:
             logger.error(f"Ошибка пинга: {str(e)}")
@@ -148,7 +172,7 @@ def start_spam_groups(message):
     SPAM_THREADS['groups'] = []
     for chat_id in VK_Groups[:]:
         thread = threading.Thread(target=send_and_delete_vk_messages, args=(chat_id, message.chat.id))
-        thread.daemon = True  # Потоки завершаются вместе с основным процессом
+        thread.daemon = True
         thread.start()
         SPAM_THREADS['groups'].append(thread)
     bot.send_message(message.chat.id, "Спам запущен в группах VK!", reply_markup=spam_menu('groups'))
@@ -375,8 +399,8 @@ def setup_webhook():
     while retries < max_retries:
         try:
             logger.debug(f"Попытка установки вебхука: {WEBHOOK_FULL_URL}")
-            bot.remove_webhook()  # Удаляем старый вебхук, если есть
-            time.sleep(1)  # Задержка для стабильности
+            bot.remove_webhook()
+            time.sleep(1)
             bot.set_webhook(url=WEBHOOK_FULL_URL)
             webhook_info = bot.get_webhook_info()
             logger.debug(f"Информация о вебхуке: {webhook_info}")
@@ -403,19 +427,6 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-# Функция для самопингования
-def ping_service():
-    global bot_started
-    PING_URL = os.getenv('PING_URL', f"https://{RENDER_PUBLIC_DOMAIN}")
-    PING_INTERVAL = 900  # 15 минут
-    while bot_started:
-        try:
-            response = requests.head(PING_URL, timeout=5)  # Используем HEAD для экономии трафика
-            logger.debug(f"Пинг: статус {response.status_code}")
-        except Exception as e:
-            logger.error(f"Ошибка пинга: {str(e)}")
-        time.sleep(PING_INTERVAL)
-
 # Запуск бота
 if __name__ == "__main__":
     logger.info(f"Запуск бота, экземпляр: {INSTANCE_ID}")
@@ -431,5 +442,5 @@ if __name__ == "__main__":
     ping_thread.start()
 
     # Настройка для Render
-    port = int(os.getenv('PORT', 10000))  # По умолчанию порт Render
+    port = int(os.getenv('PORT', 10000))
     app.run(host='0.0.0.0', port=port, debug=False)
