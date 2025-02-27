@@ -16,9 +16,11 @@ except ImportError as e:
     print(f"Ошибка: отсутствует библиотека - {e}. Установите зависимости с помощью 'pip install -r requirements.txt'.")
     sys.exit(1)
 
+# Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Загрузка переменных окружения
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
@@ -43,6 +45,15 @@ bot = TeleBot(TELEGRAM_TOKEN, threaded=False)
 
 vk_session = vk_api.VkApi(token=VK_TOKEN) if VK_TOKEN else None
 vk = vk_session.get_api() if vk_session else None
+
+# Проверка токена VK при запуске
+if vk:
+    try:
+        vk.account.getInfo()
+        logger.info("VK токен действителен")
+    except vk_api.exceptions.ApiError as e:
+        logger.error(f"Ошибка проверки VK токена: {str(e)}")
+        vk = None
 
 VK_Groups = [-211223344, -155667788, -199887766, -188445566, -177334455]
 VK_CONVERSATIONS = [2000000001, 2000000005]
@@ -96,11 +107,18 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
                 raise Exception("VK API не инициализирован")
             logger.debug(f"Начало отправки в чат {chat_id}")
             if chat_id < 0:
-                msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
-                bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в чат группы VK {chat_id}")
-                time.sleep(DELETE_TIME)
-                vk.messages.delete(message_ids=[msg1], delete_for_all=1)
-                bot.send_message(telegram_chat_id, f"Удалено сообщение из чата группы VK {chat_id}")
+                try:
+                    msg1 = vk.messages.send(peer_id=chat_id, message=SPAM_TEMPLATE, random_id=int(time.time() * 1000))
+                    bot.send_message(telegram_chat_id, f"Отправлено '{SPAM_TEMPLATE}' в чат группы VK {chat_id}")
+                    time.sleep(DELETE_TIME)
+                    vk.messages.delete(message_ids=[msg1], delete_for_all=1)
+                    bot.send_message(telegram_chat_id, f"Удалено сообщение из чата группы VK {chat_id}")
+                except vk_api.exceptions.ApiError as chat_error:
+                    if chat_error.code == 7:
+                        logger.warning(f"Нет прав для отправки в чат {chat_id}")
+                        bot.send_message(telegram_chat_id, f"Нет прав для отправки в чат группы {chat_id}. Проверьте токен или настройки группы.")
+                    else:
+                        raise chat_error
                 
                 group_id = abs(chat_id)
                 logger.debug(f"Публикация на стену группы {chat_id} с owner_id=-{group_id}")
@@ -121,10 +139,12 @@ def send_and_delete_vk_messages(chat_id, telegram_chat_id):
         except vk_api.exceptions.ApiError as e:
             logger.error(f"Ошибка VK API в чате {chat_id}: {str(e)}")
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)} (код: {e.code})")
+            SPAM_RUNNING['groups' if chat_id < 0 else 'conversations'] = False
             break
         except Exception as e:
             logger.error(f"Общая ошибка в чате {chat_id}: {str(e)}")
             bot.send_message(telegram_chat_id, f"Ошибка в чате {chat_id}: {str(e)}")
+            SPAM_RUNNING['groups' if chat_id < 0 else 'conversations'] = False
             break
 
 def ping_service():
@@ -158,7 +178,12 @@ def start_spam_groups(message):
         bot.send_message(message.chat.id, "Список групп пуст!", reply_markup=main_menu())
         return
     if not vk:
-        bot.send_message(message.chat.id, "VK токен не установлен!", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "VK токен не установлен или недействителен!", reply_markup=main_menu())
+        return
+    try:
+        vk.account.getInfo()
+    except vk_api.exceptions.ApiError as e:
+        bot.send_message(message.chat.id, f"Ошибка VK токена: {str(e)}. Обновите токен!", reply_markup=main_menu())
         return
     SPAM_RUNNING['groups'] = True
     SPAM_THREADS['groups'] = []
@@ -178,7 +203,12 @@ def start_spam_conversations(message):
         bot.send_message(message.chat.id, "Список бесед пуст!", reply_markup=main_menu())
         return
     if not vk:
-        bot.send_message(message.chat.id, "VK токен не установлен!", reply_markup=main_menu())
+        bot.send_message(message.chat.id, "VK токен не установлен или недействителен!", reply_markup=main_menu())
+        return
+    try:
+        vk.account.getInfo()
+    except vk_api.exceptions.ApiError as e:
+        bot.send_message(message.chat.id, f"Ошибка VK токена: {str(e)}. Обновите токен!", reply_markup=main_menu())
         return
     SPAM_RUNNING['conversations'] = True
     SPAM_THREADS['conversations'] = []
@@ -198,13 +228,14 @@ def stop_spam(message):
     SPAM_RUNNING['groups'] = False
     SPAM_RUNNING['conversations'] = False
     for thread_type in SPAM_THREADS:
-        for thread in SPAM_THREADS[thread_type][:]:
+        threads = SPAM_THREADS[thread_type][:]
+        for thread in threads:
             if thread.is_alive():
                 logger.debug(f"Ожидание завершения потока для {thread_type}")
                 thread.join(timeout=5)
                 if thread.is_alive():
                     logger.warning(f"Поток для {thread_type} не завершился вовремя")
-    SPAM_THREADS = {'groups': [], 'conversations': []}
+        SPAM_THREADS[thread_type].clear()
     bot.send_message(message.chat.id, "Спам остановлен!", reply_markup=main_menu())
     logger.info("Спам успешно остановлен")
 
@@ -345,8 +376,10 @@ def update_vk_token(message):
         vk = vk_session.get_api()
         vk.account.getInfo()
         bot.send_message(message.chat.id, "Токен VK обновлён!", reply_markup=main_menu())
+        logger.info("Новый VK токен успешно установлен")
     except Exception as e:
         bot.send_message(message.chat.id, f"Ошибка: {str(e)}. Токен недействителен!", reply_markup=main_menu())
+        logger.error(f"Ошибка установки VK токена: {str(e)}")
 
 @bot.message_handler(func=lambda message: message.text == "🗑 Очистить API VK")
 def clear_vk_api_prompt(message):
@@ -391,7 +424,10 @@ def webhook():
         logger.debug(f"Получено обновление: {json_string}")
         update = types.Update.de_json(json_string)
         if update:
-            bot.process_new_updates([update])
+            try:
+                bot.process_new_updates([update])
+            except Exception as e:
+                logger.error(f"Ошибка обработки обновления: {str(e)}")
         else:
             logger.warning("Получено пустое обновление")
         return Response('OK', status=200)
